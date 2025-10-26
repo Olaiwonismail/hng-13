@@ -25,7 +25,10 @@ class CountryModel(db.Model):
 	estimated_gdp = db.Column(db.Float, nullable=True)
 	flag_url = db.Column(db.String(200))
 	last_refreshed_at = db.Column(db.DateTime)
-db.create_all()
+
+with app.app_context():
+		
+    db.create_all() 
 
 # Helper: fetch external data (countries + exchange rates)
 def fetch_external_data():
