@@ -186,6 +186,10 @@ def generate_summary_image(refresh_ts):
 	img.save(image_path)
 	return image_path
 
+@app.route('/')
+def hi():
+	return 'hi'
+
 # POST /countries/refresh
 @app.route('/countries/refresh', methods=['POST'])
 def refresh_countries():
