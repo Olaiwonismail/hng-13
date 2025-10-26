@@ -7,6 +7,11 @@ import random
 from sqlalchemy import func
 from PIL import Image, ImageDraw, ImageFont
 
+import logging
+logging.basicConfig(level=logging.DEBUG)
+
+# ksk
+
 app = Flask(__name__)
 # Use DATABASE_URL if provided, otherwise fallback to sqlite
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:////tmp/data.db'
