@@ -154,8 +154,8 @@ def save_countries(processed):
 
 # Helper: generate summary image (cache/summary.png)
 def generate_summary_image(refresh_ts):
-	os.makedirs('cache', exist_ok=True)
-	image_path = os.path.join('cache', 'summary.png')
+	os.makedirs('/tmp/cache', exist_ok=True)
+	image_path = os.path.join('/tmp/cache', 'summary.png')
 	total = CountryModel.query.count()
 	top5 = CountryModel.query.filter(CountryModel.estimated_gdp != None).order_by(CountryModel.estimated_gdp.desc()).limit(5).all()
 
