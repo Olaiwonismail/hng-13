@@ -9,7 +9,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 app = Flask(__name__)
 # Use DATABASE_URL if provided, otherwise fallback to sqlite
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///countries.db')
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:////tmp/data.db'
+
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
