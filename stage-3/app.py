@@ -1,4 +1,5 @@
 # app.py
+from random import random
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -217,8 +218,8 @@ def extract_subject_from_message(user_message: A2AMessage) -> str:
                     break
         if subject:
             break
-    
-    return subject or "chemistry"  # Default to chemistry if no subject found
+
+    return subject or random.choice(subjects)  # Default to a random subject if no subject found
 
 async def process_messages(
     messages: List[A2AMessage],
