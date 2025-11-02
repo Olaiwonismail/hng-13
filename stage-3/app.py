@@ -254,16 +254,17 @@ async def process_messages(
             name="question_data",
             parts=[
                 MessagePart(
-                    kind="data", 
-                    data={
-                        "subject": subject,
-                        "question_id": question_data.id if 'question_data' in locals() else None,
-                        "exam_type": question_data.examtype if 'question_data' in locals() else None,
-                        "exam_year": question_data.examyear if 'question_data' in locals() else None,
-                        "correct_answer": question_data.answer if 'question_data' in locals() else None,
-                        "ai_explanation": explanation if 'explanation' in locals() else None
-                    }
-                )
+    kind="data",
+    data=[{
+        "subject": subject,
+        "question_id": question_data.id if 'question_data' in locals() else None,
+        "exam_type": question_data.examtype if 'question_data' in locals() else None,
+        "exam_year": question_data.examyear if 'question_data' in locals() else None,
+        "correct_answer": question_data.answer if 'question_data' in locals() else None,
+        "ai_explanation": explanation if 'explanation' in locals() else None
+    }]
+)
+
             ]
         )
     ]
