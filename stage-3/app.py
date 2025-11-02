@@ -107,7 +107,7 @@ app = FastAPI(
 
 # API Configuration
 ALOC_API_URL = "https://questions.aloc.com.ng/api/v2/q"
-# ALOC_ACCESS_TOKEN = "QB-a751e98198ee73250aea"
+
 ALOC_ACCESS_TOKEN = os.getenv("ALOC_ACCESS_TOKEN")
 
 # Initialize Gemini client
