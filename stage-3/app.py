@@ -48,11 +48,11 @@ class JSONRPCRequest(BaseModel):
     jsonrpc: Literal["2.0"]
     id: str
     method: Literal["message/send", "execute"]
-    params: Union[MessageParams, ExecuteParams, Dict[str, Any]]  # More flexible
+    params: Union[MessageParams, ExecuteParams, Dict[str, Any]]
 
 class TaskStatus(BaseModel):
     state: Literal["working", "completed", "input-required", "failed"]
-    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
     message: Optional[A2AMessage] = None
 
 class Artifact(BaseModel):
@@ -175,25 +175,6 @@ async def get_ai_explanation(question_data: ALOCQuestionData, subject: str) -> s
     except Exception as e:
         return f"🤖 AI Explanation temporarily unavailable. Correct answer: {question_data.answer.upper()}"
 
-def format_question_response(question_data: ALOCQuestionData, explanation: str, subject: str) -> str:
-    """Format the question, options, and AI explanation into a readable string"""
-    question_text = f"📚 {subject.upper()} Question:\n\n{question_data.question}\n\n"
-    
-    options = []
-    for key, value in question_data.option.model_dump().items():
-        if value:  # Only include non-null options
-            options.append(f"{key.upper()}. {value}")
-    
-    question_text += "\n".join(options)
-    question_text += f"\n\n✅ Correct Answer: {question_data.answer.upper()}"
-    question_text += f"\n\n🤖 AI Explanation:\n{explanation}"
-    question_text += f"\n\n📝 Exam: {question_data.examtype.upper()} {question_data.examyear}"
-    
-    if question_data.solution:
-        question_text += f"\n💡 Original Solution: {question_data.solution}"
-    
-    return question_text
-
 def extract_subject_from_message(user_message: A2AMessage) -> str:
     """Extract subject from user message, handling nested data structures"""
     subject = ""
@@ -263,16 +244,82 @@ async def process_messages(
     # Extract subject from user message using the improved function
     subject = extract_subject_from_message(user_message)
 
-    # Fetch question from ALOC API
+    # Create response text
+    response_text = ""
+    artifacts = []
+
     try:
+        # Fetch question from ALOC API
         aloc_response = await fetch_question_from_aloc(subject)
         question_data = aloc_response.data
         
         # Get AI explanation
         explanation = await get_ai_explanation(question_data, subject)
         
-        # Format the response
-        response_text = format_question_response(question_data, explanation, subject)
+        # Format the main response text (simple version)
+        options = []
+        for key, value in question_data.option.model_dump().items():
+            if value:
+                options.append(f"{key.upper()}. {value}")
+        
+        response_text = f"📚 {subject.upper()} Question:\n\n{question_data.question}\n\n"
+        response_text += "\n".join(options)
+        response_text += f"\n\n✅ Correct Answer: {question_data.answer.upper()}"
+        response_text += f"\n\n🤖 AI Explanation:\n{explanation}"
+        response_text += f"\n\n📝 Exam: {question_data.examtype.upper()} {question_data.examyear}"
+        
+        if question_data.solution:
+            response_text += f"\n💡 Original Solution: {question_data.solution}"
+
+        # Create artifacts in the exact format you specified
+        artifacts = [
+            Artifact(
+                artifactId=str(uuid4()),
+                name="question",
+                parts=[
+                    MessagePart(
+                        kind="text",
+                        text=f"{question_data.question}\n\n" + "\n".join(options)
+                    )
+                ]
+            ),
+            Artifact(
+                artifactId=str(uuid4()),
+                name="correct_answer",
+                parts=[
+                    MessagePart(
+                        kind="text",
+                        text=question_data.answer.upper()
+                    )
+                ]
+            ),
+            Artifact(
+                artifactId=str(uuid4()),
+                name="explanation",
+                parts=[
+                    MessagePart(
+                        kind="text",
+                        text=explanation
+                    )
+                ]
+            ),
+            Artifact(
+                artifactId=str(uuid4()),
+                name="metadata",
+                parts=[
+                    MessagePart(
+                        kind="data",
+                        data=[{
+                            "subject": subject,
+                            "question_id": question_data.id,
+                            "exam_type": question_data.examtype,
+                            "exam_year": question_data.examyear,
+                            "section": question_data.section
+                        }]
+                    )
+                ]
+            )
+        ]
         
     except Exception as e:
         response_text = f"❌ Error fetching question for subject '{subject}': {str(e)}\n\nAvailable subjects: chemistry, physics, mathematics, biology, english, economics, etc."
@@ -285,36 +332,14 @@ async def process_messages(
         taskId=task_id
     )
 
-    # Build artifacts with question metadata (only if we have question data)
-    artifacts = []
-    if 'question_data' in locals() and question_data:
-        artifacts = [
-            Artifact(
-                name="question_data",
-                parts=[
-                    MessagePart(
-                        kind="data",
-                        data=[{
-                            "subject": subject,
-                            "question_id": question_data.id,
-                            "exam_type": question_data.examtype,
-                            "exam_year": question_data.examyear,
-                            "correct_answer": question_data.answer,
-                            "ai_explanation": explanation
-                        }]
-                    )
-                ]
-            )
-        ]
-
-    # Build history
+    # Build history (include all messages plus the new response)
     history = messages + [response_message]
 
     return TaskResult(
         id=task_id,
         contextId=context_id,
         status=TaskStatus(
-            state="completed",
+            state="completed",  # Changed from "input-required" to "completed" since we're done
             message=response_message
         ),
         artifacts=artifacts,
