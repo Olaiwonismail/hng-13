@@ -220,6 +220,10 @@ async def root():
 async def health_check():
     return {"status": "healthy", "agent": "hehe"}
 
+@app.get("/kaithhealthcheck")
+async def kaith_health_check():
+    return {"status": "healthy", "message": "Hehe agent is running"}
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5005))
     uvicorn.run(app, host="0.0.0.0", port=port)
