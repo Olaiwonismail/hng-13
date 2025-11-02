@@ -2,7 +2,7 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from typing import Literal, Optional, List, Dict, Any
+from typing import Literal, Optional, List, Dict, Any, Union
 from uuid import uuid4
 from datetime import datetime
 import httpx
@@ -48,7 +48,7 @@ class JSONRPCRequest(BaseModel):
     jsonrpc: Literal["2.0"]
     id: str
     method: Literal["message/send", "execute"]
-    params: MessageParams | ExecuteParams
+    params: Union[MessageParams, ExecuteParams, Dict[str, Any]]  # More flexible
 
 class TaskStatus(BaseModel):
     state: Literal["working", "completed", "input-required", "failed"]
@@ -342,9 +342,10 @@ async def a2a_endpoint(request: Request):
                 }
             )
 
-        # Handle flexible params structure
+        # Handle flexible params structure without strict Pydantic validation
         method = body.get("method")
         params = body.get("params", {})
+        request_id = body.get("id")
         
         # Extract messages based on method
         messages = []
@@ -353,9 +354,27 @@ async def a2a_endpoint(request: Request):
 
         if method == "message/send":
             if "message" in params:
-                messages = [params["message"]]
+                # Convert message dict to A2AMessage
+                message_dict = params["message"]
+                message = A2AMessage(**message_dict)
+                messages = [message]
+            else:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "error": {
+                            "code": -32602,
+                            "message": "Invalid params: message is required for message/send"
+                        }
+                    }
+                )
+                
         elif method == "execute":
-            messages = params.get("messages", [])
+            messages_list = params.get("messages", [])
+            # Convert each message dict to A2AMessage
+            messages = [A2AMessage(**msg) for msg in messages_list]
             context_id = params.get("contextId")
             task_id = params.get("taskId")
         else:
@@ -363,7 +382,7 @@ async def a2a_endpoint(request: Request):
                 status_code=400,
                 content={
                     "jsonrpc": "2.0",
-                    "id": body.get("id"),
+                    "id": request_id,
                     "error": {
                         "code": -32601,
                         "message": f"Method not found: {method}"
@@ -380,7 +399,7 @@ async def a2a_endpoint(request: Request):
 
         # Build response
         response = JSONRPCResponse(
-            id=body["id"],
+            id=request_id,
             result=result
         )
 
