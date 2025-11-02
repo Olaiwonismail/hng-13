@@ -282,7 +282,7 @@ async def process_messages(
         history=history
     )
 
-@app.post("/a2a/questions")
+@app.post("/a2a/agent/waecBot")
 async def a2a_endpoint(request: Request):
     """Main A2A endpoint for question bank agent"""
     try:
