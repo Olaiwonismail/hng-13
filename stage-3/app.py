@@ -1,5 +1,4 @@
 # app.py
-from random import random
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -177,49 +176,49 @@ async def get_ai_explanation(question_data: ALOCQuestionData, subject: str) -> s
         return f"🤖 AI Explanation temporarily unavailable. Correct answer: {question_data.answer.upper()}"
 
 def extract_subject_from_message(user_message: A2AMessage) -> str:
-    """Extract subject from user message, handling nested data structures"""
+    """Extract subject from user message, specifically from the last data item"""
     subject = ""
     
+    # Look through all parts for data parts
     for part in user_message.parts:
-        if part.kind == "text" and part.text:
-            # Clean and extract subject from text
-            clean_text = part.text.strip().lower()
-            # Look for subject keywords in the text
-            subjects = ["chemistry", "physics", "mathematics", "biology", 
-                       "english", "economics", "government", "geography",
-                       "accounting", "commerce", "literature", "history"]
+        if part.kind == "data" and part.data:
+            # Get the last item in the data array
+            last_data_item = part.data[-1]
             
-            for subj in subjects:
-                if subj in clean_text:
-                    subject = subj
-                    break
-            if subject:
-                break
+            # Check if it's a dictionary with "text" field
+            if isinstance(last_data_item, dict) and "text" in last_data_item:
+                subject_text = last_data_item["text"].strip().lower()
                 
-        elif part.kind == "data" and part.data:
-            # Handle nested data structure - recursively look for text in data
-            for data_item in part.data:
-                if isinstance(data_item, dict):
-                    # Look for text fields in the data
-                    for key, value in data_item.items():
-                        if isinstance(value, str) and value.strip():
-                            clean_value = value.strip().lower()
-                            subjects = ["chemistry", "physics", "mathematics", "biology", 
-                                       "english", "economics", "government", "geography",
-                                       "accounting", "commerce", "literature", "history"]
-                            
-                            for subj in subjects:
-                                if subj in clean_value:
-                                    subject = subj
-                                    break
-                        if subject:
-                            break
+                # Look for subject keywords in the text
+                subjects = ["chemistry", "physics", "mathematics", "biology", 
+                           "english", "economics", "government", "geography",
+                           "accounting", "commerce", "literature", "history"]
+                
+                for subj in subjects:
+                    if subj in subject_text:
+                        subject = subj
+                        break
+                
                 if subject:
                     break
-        if subject:
-            break
-
-    return subject or random.choice(subjects)  # Default to a random subject if no subject found
+    
+    # If no subject found in data, fall back to text parts
+    if not subject:
+        for part in user_message.parts:
+            if part.kind == "text" and part.text:
+                clean_text = part.text.strip().lower()
+                subjects = ["chemistry", "physics", "mathematics", "biology", 
+                           "english", "economics", "government", "geography",
+                           "accounting", "commerce", "literature", "history"]
+                
+                for subj in subjects:
+                    if subj in clean_text:
+                        subject = subj
+                        break
+                if subject:
+                    break
+    
+    return subject or "chemistry"  # Default to chemistry if no subject found
 
 async def process_messages(
     messages: List[A2AMessage],
@@ -242,7 +241,7 @@ async def process_messages(
     if not user_message:
         raise ValueError("No user message found")
 
-    # Extract subject from user message using the improved function
+    # Extract subject from user message
     subject = extract_subject_from_message(user_message)
 
     # Create response text
@@ -257,7 +256,7 @@ async def process_messages(
         # Get AI explanation
         explanation = await get_ai_explanation(question_data, subject)
         
-        # Format the main response text (simple version)
+        # Format the main response text
         options = []
         for key, value in question_data.option.model_dump().items():
             if value:
@@ -272,7 +271,7 @@ async def process_messages(
         if question_data.solution:
             response_text += f"\n💡 Original Solution: {question_data.solution}"
 
-        # Create artifacts in the exact format you specified
+        # Create artifacts
         artifacts = [
             Artifact(
                 artifactId=str(uuid4()),
@@ -333,14 +332,14 @@ async def process_messages(
         taskId=task_id
     )
 
-    # Build history (include all messages plus the new response)
+    # Build history
     history = messages + [response_message]
 
     return TaskResult(
         id=task_id,
         contextId=context_id,
         status=TaskStatus(
-            state="completed",  # Changed from "input-required" to "completed" since we're done
+            state="completed",
             message=response_message
         ),
         artifacts=artifacts,
@@ -368,7 +367,7 @@ async def a2a_endpoint(request: Request):
                 }
             )
 
-        # Handle flexible params structure without strict Pydantic validation
+        # Handle flexible params structure
         method = body.get("method")
         params = body.get("params", {})
         request_id = body.get("id")
@@ -380,7 +379,6 @@ async def a2a_endpoint(request: Request):
 
         if method == "message/send":
             if "message" in params:
-                # Convert message dict to A2AMessage
                 message_dict = params["message"]
                 message = A2AMessage(**message_dict)
                 messages = [message]
@@ -399,7 +397,6 @@ async def a2a_endpoint(request: Request):
                 
         elif method == "execute":
             messages_list = params.get("messages", [])
-            # Convert each message dict to A2AMessage
             messages = [A2AMessage(**msg) for msg in messages_list]
             context_id = params.get("contextId")
             task_id = params.get("taskId")
