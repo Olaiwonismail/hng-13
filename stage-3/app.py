@@ -107,7 +107,6 @@ app = FastAPI(
 
 # API Configuration
 ALOC_API_URL = "https://questions.aloc.com.ng/api/v2/q"
-
 ALOC_ACCESS_TOKEN = os.getenv("ALOC_ACCESS_TOKEN")
 
 # Initialize Gemini client
@@ -195,6 +194,51 @@ def format_question_response(question_data: ALOCQuestionData, explanation: str, 
     
     return question_text
 
+def extract_subject_from_message(user_message: A2AMessage) -> str:
+    """Extract subject from user message, handling nested data structures"""
+    subject = ""
+    
+    for part in user_message.parts:
+        if part.kind == "text" and part.text:
+            # Clean and extract subject from text
+            clean_text = part.text.strip().lower()
+            # Look for subject keywords in the text
+            subjects = ["chemistry", "physics", "mathematics", "biology", 
+                       "english", "economics", "government", "geography",
+                       "accounting", "commerce", "literature", "history"]
+            
+            for subj in subjects:
+                if subj in clean_text:
+                    subject = subj
+                    break
+            if subject:
+                break
+                
+        elif part.kind == "data" and part.data:
+            # Handle nested data structure - recursively look for text in data
+            for data_item in part.data:
+                if isinstance(data_item, dict):
+                    # Look for text fields in the data
+                    for key, value in data_item.items():
+                        if isinstance(value, str) and value.strip():
+                            clean_value = value.strip().lower()
+                            subjects = ["chemistry", "physics", "mathematics", "biology", 
+                                       "english", "economics", "government", "geography",
+                                       "accounting", "commerce", "literature", "history"]
+                            
+                            for subj in subjects:
+                                if subj in clean_value:
+                                    subject = subj
+                                    break
+                        if subject:
+                            break
+                if subject:
+                    break
+        if subject:
+            break
+    
+    return subject or "chemistry"  # Default to chemistry if no subject found
+
 async def process_messages(
     messages: List[A2AMessage],
     context_id: Optional[str] = None,
@@ -216,15 +260,8 @@ async def process_messages(
     if not user_message:
         raise ValueError("No user message found")
 
-    # Extract subject from user message
-    subject = ""
-    for part in user_message.parts:
-        if part.kind == "text" and part.text:
-            subject = part.text.strip()
-            break
-
-    if not subject:
-        raise ValueError("No subject provided in message")
+    # Extract subject from user message using the improved function
+    subject = extract_subject_from_message(user_message)
 
     # Fetch question from ALOC API
     try:
@@ -248,26 +285,27 @@ async def process_messages(
         taskId=task_id
     )
 
-    # Build artifacts with question metadata
-    artifacts = [
-        Artifact(
-            name="question_data",
-            parts=[
-                MessagePart(
-    kind="data",
-    data=[{
-        "subject": subject,
-        "question_id": question_data.id if 'question_data' in locals() else None,
-        "exam_type": question_data.examtype if 'question_data' in locals() else None,
-        "exam_year": question_data.examyear if 'question_data' in locals() else None,
-        "correct_answer": question_data.answer if 'question_data' in locals() else None,
-        "ai_explanation": explanation if 'explanation' in locals() else None
-    }]
-)
-
-            ]
-        )
-    ]
+    # Build artifacts with question metadata (only if we have question data)
+    artifacts = []
+    if 'question_data' in locals() and question_data:
+        artifacts = [
+            Artifact(
+                name="question_data",
+                parts=[
+                    MessagePart(
+                        kind="data",
+                        data=[{
+                            "subject": subject,
+                            "question_id": question_data.id,
+                            "exam_type": question_data.examtype,
+                            "exam_year": question_data.examyear,
+                            "correct_answer": question_data.answer,
+                            "ai_explanation": explanation
+                        }]
+                    )
+                ]
+            )
+        ]
 
     # Build history
     history = messages + [response_message]
@@ -304,19 +342,34 @@ async def a2a_endpoint(request: Request):
                 }
             )
 
-        rpc_request = JSONRPCRequest(**body)
-
-        # Extract messages
+        # Handle flexible params structure
+        method = body.get("method")
+        params = body.get("params", {})
+        
+        # Extract messages based on method
         messages = []
         context_id = None
         task_id = None
 
-        if rpc_request.method == "message/send":
-            messages = [rpc_request.params.message]
-        elif rpc_request.method == "execute":
-            messages = rpc_request.params.messages
-            context_id = rpc_request.params.contextId
-            task_id = rpc_request.params.taskId
+        if method == "message/send":
+            if "message" in params:
+                messages = [params["message"]]
+        elif method == "execute":
+            messages = params.get("messages", [])
+            context_id = params.get("contextId")
+            task_id = params.get("taskId")
+        else:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "jsonrpc": "2.0",
+                    "id": body.get("id"),
+                    "error": {
+                        "code": -32601,
+                        "message": f"Method not found: {method}"
+                    }
+                }
+            )
 
         # Process messages
         result = await process_messages(
@@ -327,7 +380,7 @@ async def a2a_endpoint(request: Request):
 
         # Build response
         response = JSONRPCResponse(
-            id=rpc_request.id,
+            id=body["id"],
             result=result
         )
 
@@ -349,7 +402,7 @@ async def a2a_endpoint(request: Request):
 
 @app.get("/")
 async def root():
-    return {"message": "Question Bank Agent with AI Explanations is running! Send POST requests to /a2a/questions"}
+    return {"message": "Question Bank Agent with AI Explanations is running! Send POST requests to /a2a/agent/waecBot"}
 
 @app.get("/health")
 async def health_check():
@@ -367,5 +420,5 @@ async def available_subjects():
     return {"available_subjects": subjects}
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5001))
+    port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
