@@ -5,8 +5,10 @@ from pydantic import BaseModel, Field
 from typing import Literal, Optional, List, Dict, Any
 from uuid import uuid4
 from datetime import datetime
+import httpx
 import uvicorn
 import os
+from google import genai
 
 # A2A Protocol Models
 class MessagePart(BaseModel):
@@ -72,42 +74,133 @@ class JSONRPCResponse(BaseModel):
     result: Optional[TaskResult] = None
     error: Optional[Dict[str, Any]] = None
 
+# ALOC API Response Models
+class ALOCQuestionOption(BaseModel):
+    a: Optional[str] = None
+    b: Optional[str] = None
+    c: Optional[str] = None
+    d: Optional[str] = None
+    e: Optional[str] = None
+
+class ALOCQuestionData(BaseModel):
+    id: int
+    question: str
+    option: ALOCQuestionOption
+    section: str
+    image: str
+    answer: str
+    solution: str
+    examtype: str
+    examyear: str
+
+class ALOCAPIResponse(BaseModel):
+    subject: str
+    status: int
+    data: ALOCQuestionData
+
 # FastAPI App
 app = FastAPI(
-    title="Hehe Agent A2A",
-    description="A simple agent that adds 'hehe' to messages",
+    title="Question Bank Agent A2A",
+    description="An agent that fetches educational questions from ALOC API with AI explanations",
     version="1.0.0"
 )
 
-def add_hehe_to_message(message: A2AMessage) -> A2AMessage:
-    """Add 'hehe' to all text parts of a message"""
-    modified_parts = []
+# API Configuration
+ALOC_API_URL = "https://questions.aloc.com.ng/api/v2/q"
+# ALOC_ACCESS_TOKEN = "QB-a751e98198ee73250aea"
+ALOC_ACCESS_TOKEN = os.getenv("ALOC_ACCESS_TOKEN")
+
+# Initialize Gemini client
+gemini_client = None
+
+@app.on_event("startup")
+async def startup_event():
+    global gemini_client
+    gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+async def fetch_question_from_aloc(subject: str) -> ALOCAPIResponse:
+    """Fetch a random question from ALOC API for the given subject"""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            ALOC_API_URL,
+            params={
+                "subject": subject.lower(),
+                "random": "true"
+            },
+            headers={
+                "AccessToken": ALOC_ACCESS_TOKEN
+            }
+        )
+        
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"ALOC API error: {response.text}"
+            )
+        
+        return ALOCAPIResponse(**response.json())
+
+async def get_ai_explanation(question_data: ALOCQuestionData, subject: str) -> str:
+    """Get AI explanation for the question and correct answer using Gemini"""
+    try:
+        # Build the prompt for Gemini
+        prompt = f"""
+        Please provide a clear, concise explanation for this {subject} question:
+        
+        QUESTION: {question_data.question}
+        
+        OPTIONS:
+        A. {question_data.option.a or 'N/A'}
+        B. {question_data.option.b or 'N/A'}
+        C. {question_data.option.c or 'N/A'}
+        D. {question_data.option.d or 'N/A'}
+        E. {question_data.option.e or 'N/A'}
+        
+        CORRECT ANSWER: {question_data.answer.upper()}
+        
+        Please explain:
+        1. Why the correct answer is right
+        2. Brief context about the concept
+        3. Keep it educational and easy to understand (2-3 sentences max)
+        
+        Format your response as a clear explanation without markdown.
+        """
+        
+        response = gemini_client.models.generate_content(
+            model="gemini-2.0-flash-exp",
+            contents=prompt
+        )
+        
+        return response.text.strip()
+        
+    except Exception as e:
+        return f"🤖 AI Explanation temporarily unavailable. Correct answer: {question_data.answer.upper()}"
+
+def format_question_response(question_data: ALOCQuestionData, explanation: str, subject: str) -> str:
+    """Format the question, options, and AI explanation into a readable string"""
+    question_text = f"📚 {subject.upper()} Question:\n\n{question_data.question}\n\n"
     
-    for part in message.parts:
-        if part.kind == "text" and part.text:
-            modified_text = f"{part.text} hehe"
-            modified_parts.append(MessagePart(
-                kind="text",
-                text=modified_text
-            ))
-        else:
-            # Keep non-text parts as-is
-            modified_parts.append(part)
+    options = []
+    for key, value in question_data.option.model_dump().items():
+        if value:  # Only include non-null options
+            options.append(f"{key.upper()}. {value}")
     
-    return A2AMessage(
-        role="agent",
-        parts=modified_parts,
-        messageId=str(uuid4()),
-        taskId=message.taskId,
-        metadata=message.metadata
-    )
+    question_text += "\n".join(options)
+    question_text += f"\n\n✅ Correct Answer: {question_data.answer.upper()}"
+    question_text += f"\n\n🤖 AI Explanation:\n{explanation}"
+    question_text += f"\n\n📝 Exam: {question_data.examtype.upper()} {question_data.examyear}"
+    
+    if question_data.solution:
+        question_text += f"\n💡 Original Solution: {question_data.solution}"
+    
+    return question_text
 
 async def process_messages(
     messages: List[A2AMessage],
     context_id: Optional[str] = None,
     task_id: Optional[str] = None
 ) -> TaskResult:
-    """Process messages by adding 'hehe' to the last user message"""
+    """Process messages by fetching questions from ALOC API and generating AI explanations"""
     
     # Generate IDs if not provided
     context_id = context_id or str(uuid4())
@@ -123,14 +216,55 @@ async def process_messages(
     if not user_message:
         raise ValueError("No user message found")
 
-    # Add 'hehe' to the message
-    response_message = add_hehe_to_message(user_message)
+    # Extract subject from user message
+    subject = ""
+    for part in user_message.parts:
+        if part.kind == "text" and part.text:
+            subject = part.text.strip()
+            break
 
-    # Build artifacts (optional)
+    if not subject:
+        raise ValueError("No subject provided in message")
+
+    # Fetch question from ALOC API
+    try:
+        aloc_response = await fetch_question_from_aloc(subject)
+        question_data = aloc_response.data
+        
+        # Get AI explanation
+        explanation = await get_ai_explanation(question_data, subject)
+        
+        # Format the response
+        response_text = format_question_response(question_data, explanation, subject)
+        
+    except Exception as e:
+        response_text = f"❌ Error fetching question for subject '{subject}': {str(e)}\n\nAvailable subjects: chemistry, physics, mathematics, biology, english, economics, etc."
+
+    # Create response message
+    response_message = A2AMessage(
+        role="agent",
+        parts=[MessagePart(kind="text", text=response_text)],
+        messageId=str(uuid4()),
+        taskId=task_id
+    )
+
+    # Build artifacts with question metadata
     artifacts = [
         Artifact(
-            name="modified_message",
-            parts=[MessagePart(kind="text", text="Message processed with hehe")]
+            name="question_data",
+            parts=[
+                MessagePart(
+                    kind="data", 
+                    data={
+                        "subject": subject,
+                        "question_id": question_data.id if 'question_data' in locals() else None,
+                        "exam_type": question_data.examtype if 'question_data' in locals() else None,
+                        "exam_year": question_data.examyear if 'question_data' in locals() else None,
+                        "correct_answer": question_data.answer if 'question_data' in locals() else None,
+                        "ai_explanation": explanation if 'explanation' in locals() else None
+                    }
+                )
+            ]
         )
     ]
 
@@ -148,9 +282,9 @@ async def process_messages(
         history=history
     )
 
-@app.post("/a2a/hehe")
+@app.post("/a2a/questions")
 async def a2a_endpoint(request: Request):
-    """Main A2A endpoint for hehe agent"""
+    """Main A2A endpoint for question bank agent"""
     try:
         # Parse request body
         body = await request.json()
@@ -214,16 +348,23 @@ async def a2a_endpoint(request: Request):
 
 @app.get("/")
 async def root():
-    return {"message": "Hehe Agent is running! Send POST requests to /a2a/hehe"}
+    return {"message": "Question Bank Agent with AI Explanations is running! Send POST requests to /a2a/questions"}
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "agent": "hehe"}
+    gemini_status = "connected" if gemini_client else "disconnected"
+    return {"status": "healthy", "agent": "question_bank", "gemini": gemini_status}
 
-@app.get("/kaithhealthcheck")
-async def kaith_health_check():
-    return {"status": "healthy", "message": "Hehe agent is running"}
+@app.get("/subjects")
+async def available_subjects():
+    """Endpoint to show available subjects"""
+    subjects = [
+        "chemistry", "physics", "mathematics", "biology", 
+        "english", "economics", "government", "geography",
+        "accounting", "commerce", "literature", "history"
+    ]
+    return {"available_subjects": subjects}
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 8000))
+    port = int(os.getenv("PORT", 5001))
     uvicorn.run(app, host="0.0.0.0", port=port)
